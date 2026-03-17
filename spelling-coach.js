@@ -7,9 +7,9 @@ const path = require('node:path');
 const HOOK_DIR = path.join(process.env.HOME, '.claude', 'hooks', 'spelling-coach');
 const DATA_FILE = path.join(HOOK_DIR, 'data.json');
 const LOCK_FILE = path.join(HOOK_DIR, 'data.json.lock');
-const DICT_FILE = '/usr/share/dict/words';
+const BUNDLED_DICT_FILE = path.join(HOOK_DIR, 'words.txt');
+const FALLBACK_DICT_FILE = '/usr/share/dict/words';
 const CUSTOM_DICT_FILE = path.join(HOOK_DIR, 'custom-dictionary.txt');
-const COMMON_WORDS_FILE = path.join(HOOK_DIR, 'common-words.txt');
 const CURRENT_VERSION = 1;
 const HARD_TIMEOUT_MS = 1800;
 const MAX_SUGGEST_PER_PROMPT = 3;
@@ -121,104 +121,48 @@ function tokenize(text) {
   return [...new Set(words)];
 }
 
-// --- Stem check ---
-// The macOS /usr/share/dict/words only has root forms. Instead of inflating
-// the Set (1.6M entries, 575ms), we strip common suffixes lazily to find
-// the root word. This keeps the Set at 234K and loads in ~50ms.
-function isKnownWord(word, dictSet) {
-  if (dictSet.has(word)) return true;
-
-  // Try stripping common suffixes to find root
-  const suffixes = [
-    // Order matters: try longer suffixes first
-    { suffix: 'iest', replace: 'y' },   // happiest -> happy
-    { suffix: 'ily', replace: 'y' },    // happily -> happy
-    { suffix: 'ier', replace: 'y' },    // happier -> happy
-    { suffix: 'ied', replace: 'y' },    // carried -> carry
-    { suffix: 'ies', replace: 'y' },    // carries -> carry
-    { suffix: 'ness', replace: '' },     // darkness -> dark
-    { suffix: 'ment', replace: '' },     // management -> manage... needs 'e' too
-    { suffix: 'able', replace: '' },     // readable -> read
-    { suffix: 'ting', replace: 'te' },   // creating -> create
-    { suffix: 'ding', replace: 'de' },   // providing -> provide
-    { suffix: 'ging', replace: 'ge' },   // managing -> manage
-    { suffix: 'sing', replace: 'se' },   // using -> use
-    { suffix: 'ving', replace: 've' },   // moving -> move
-    { suffix: 'ning', replace: 'ne' },   // defining -> define
-    { suffix: 'ring', replace: 're' },   // configuring -> configure
-    { suffix: 'ling', replace: 'le' },   // handling -> handle
-    { suffix: 'zing', replace: 'ze' },   // analyzing -> analyze
-    { suffix: 'ted', replace: 'te' },    // created -> create
-    { suffix: 'ded', replace: 'de' },    // provided -> provide
-    { suffix: 'ged', replace: 'ge' },    // managed -> manage
-    { suffix: 'sed', replace: 'se' },    // used -> use
-    { suffix: 'ved', replace: 've' },    // moved -> move
-    { suffix: 'red', replace: 're' },    // configured -> configure
-    { suffix: 'led', replace: 'le' },    // handled -> handle
-    { suffix: 'zed', replace: 'ze' },    // analyzed -> analyze
-    { suffix: 'ing', replace: '' },      // running -> run
-    { suffix: 'ing', replace: 'e' },     // coming -> come
-    { suffix: 'ers', replace: '' },      // workers -> work
-    { suffix: 'ers', replace: 'e' },     // users -> use
-    { suffix: 'est', replace: '' },      // fastest -> fast
-    { suffix: 'ful', replace: '' },      // helpful -> help
-    { suffix: 'ous', replace: '' },      // dangerous -> danger
-    { suffix: 'ion', replace: 'e' },     // creation -> create
-    { suffix: 'ity', replace: '' },      // ability -> abil... not always clean
-    { suffix: 'lly', replace: 'l' },     // actually -> actual
-    { suffix: 'ally', replace: 'al' },   // finally -> final
-    { suffix: 'ed', replace: '' },       // worked -> work
-    { suffix: 'ed', replace: 'e' },     // used -> use (for roots ending in 'e')
-    { suffix: 'er', replace: '' },       // worker -> work
-    { suffix: 'er', replace: 'e' },      // user -> use
-    { suffix: 'ly', replace: '' },       // quickly -> quick
-    { suffix: 'es', replace: '' },       // boxes -> box
-    { suffix: 'd', replace: '' },        // referenced -> reference
-    { suffix: 's', replace: '' },        // cats -> cat
-  ];
-
-  for (const { suffix, replace } of suffixes) {
-    if (word.endsWith(suffix) && word.length > suffix.length + 1) {
-      const stem = word.slice(0, -suffix.length) + replace;
-      if (dictSet.has(stem)) return true;
-    }
-  }
-
-  return false;
-}
-
 // --- Load dictionary ---
+// Prefers bundled SCOWL word list (cross-platform, includes inflections).
+// Falls back to macOS /usr/share/dict/words if bundled list is missing.
 function loadDictionary() {
   const dictSet = new Set();
   const prefixIndex = new Map();
 
-  try {
-    const raw = fs.readFileSync(DICT_FILE, 'utf8');
-    const words = raw.split('\n');
-    for (const word of words) {
-      const lower = word.toLowerCase().trim();
-      if (lower.length < MIN_WORD_LENGTH) continue;
-      dictSet.add(lower);
-
-      // Build prefix index for suggest()
-      const prefix = lower.slice(0, 2);
-      if (!prefixIndex.has(prefix)) {
-        prefixIndex.set(prefix, []);
-      }
-      prefixIndex.get(prefix).push(lower);
+  // Try bundled word list first, then macOS fallback
+  let raw = null;
+  for (const dictPath of [BUNDLED_DICT_FILE, FALLBACK_DICT_FILE]) {
+    try {
+      raw = fs.readFileSync(dictPath, 'utf8');
+      break;
+    } catch {
+      continue;
     }
-  } catch {
-    // Dictionary not available -- return empty, hook will skip spell checking
+  }
+
+  if (!raw) return { dictSet, prefixIndex };
+
+  const words = raw.split('\n');
+  for (const word of words) {
+    const lower = word.toLowerCase().trim();
+    if (lower.length < MIN_WORD_LENGTH) continue;
+    dictSet.add(lower);
+
+    // Build prefix index for suggest()
+    const prefix = lower.slice(0, 2);
+    if (!prefixIndex.has(prefix)) {
+      prefixIndex.set(prefix, []);
+    }
+    prefixIndex.get(prefix).push(lower);
   }
 
   return { dictSet, prefixIndex };
 }
 
-// --- Load a word list file (custom dictionary or common words) ---
-function loadWordListFile(filepath) {
+// --- Load custom dictionary ---
+function loadCustomDictionary() {
   const words = new Set();
   try {
-    const raw = fs.readFileSync(filepath, 'utf8');
+    const raw = fs.readFileSync(CUSTOM_DICT_FILE, 'utf8');
     for (const line of raw.split('\n')) {
       const word = line.trim().toLowerCase();
       if (word && !word.startsWith('#')) {
@@ -226,19 +170,9 @@ function loadWordListFile(filepath) {
       }
     }
   } catch {
-    // File not available -- skip
+    // Custom dictionary not available -- skip
   }
   return words;
-}
-
-// --- Load custom dictionary ---
-function loadCustomDictionary() {
-  return loadWordListFile(CUSTOM_DICT_FILE);
-}
-
-// --- Load common words supplement ---
-function loadCommonWords() {
-  return loadWordListFile(COMMON_WORDS_FILE);
 }
 
 // --- Suggest corrections ---
@@ -538,12 +472,6 @@ function main() {
   }
 
   const customDict = loadCustomDictionary();
-  const commonWords = loadCommonWords();
-
-  // Add common words supplement to dictSet (fills gaps in macOS dictionary)
-  for (const word of commonWords) {
-    dictSet.add(word);
-  }
 
   // Build ignore set (data.ignoreList + custom dictionary)
   const ignoreSet = new Set([
@@ -567,8 +495,8 @@ function main() {
   for (const token of tokens) {
     if (ignoreSet.has(token)) continue;
 
-    // Correctly spelled (including inflected forms via stem check)
-    if (isKnownWord(token, dictSet)) continue;
+    // Correctly spelled (SCOWL word list includes inflected forms)
+    if (dictSet.has(token)) continue;
 
     // Known variant -- fast path
     if (variantMap.has(token)) {
@@ -665,7 +593,6 @@ module.exports = {
   stripNonProse,
   tokenize,
   suggest,
-  isKnownWord,
   buildVariantMap,
   checkThresholds,
   buildContext,

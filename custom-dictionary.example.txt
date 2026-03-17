@@ -2,35 +2,32 @@
 # One word per line, case-insensitive
 # Lines starting with # are comments
 #
-# Add technical terms, proper nouns, abbreviations, and known project names
+# Add technical terms, project names, abbreviations, and proper nouns
 # that the spell checker would otherwise flag as misspellings.
+# The bundled SCOWL dictionary covers standard English including
+# common tech terms, so this is for project-specific jargon.
 
-# Example: common dev terms
-repo
-config
-env
-deps
-infra
+# Example: common dev terms not in SCOWL
 devops
-cli
-api
-sdk
-dns
-yaml
-json
+nextjs
+shadcn
+graphql
+websocket
 
-# Example: tools and frameworks (uncomment what you use)
-# kubernetes
-# terraform
+# Example: tools (uncomment what you use)
 # proxmox
+# opentofu
+# openbao
 # grafana
-# prometheus
-# docker
-# nginx
-# redis
+# influxdb
+# truenas
+# vitest
+# webpack
+# eslint
 
-# Example: contractions without apostrophes (casual typing style)
-dont
-cant
-wont
+# Example: project-specific names
+# myproject
+# mycompany
+
+# Example: contractions without apostrophes
 doesnt

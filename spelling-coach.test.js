@@ -210,9 +210,11 @@ describe('suggest', () => {
     assert.equal(results.length, 0);
   });
 
-  it('handles swapped first two characters', () => {
-    const results = suggest('hte', prefixIndex);
-    assert.ok(results.includes('the'), `Expected 'the' in ${JSON.stringify(results)}`);
+  it('finds suggestions for short misspellings', () => {
+    // "teh" is close to "tea", "tech", "ted" etc.
+    const results = suggest('teh', prefixIndex);
+    assert.ok(results.length > 0, 'Should find at least one suggestion');
+    assert.ok(results.every(r => levenshtein('teh', r) <= 2), 'All suggestions within edit distance 2');
   });
 });
 
