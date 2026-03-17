@@ -9,6 +9,7 @@ const DATA_FILE = path.join(HOOK_DIR, 'data.json');
 const LOCK_FILE = path.join(HOOK_DIR, 'data.json.lock');
 const DICT_FILE = '/usr/share/dict/words';
 const CUSTOM_DICT_FILE = path.join(HOOK_DIR, 'custom-dictionary.txt');
+const COMMON_WORDS_FILE = path.join(HOOK_DIR, 'common-words.txt');
 const CURRENT_VERSION = 1;
 const HARD_TIMEOUT_MS = 1800;
 const MAX_SUGGEST_PER_PROMPT = 3;
@@ -167,10 +168,12 @@ function isKnownWord(word, dictSet) {
     { suffix: 'lly', replace: 'l' },     // actually -> actual
     { suffix: 'ally', replace: 'al' },   // finally -> final
     { suffix: 'ed', replace: '' },       // worked -> work
+    { suffix: 'ed', replace: 'e' },     // used -> use (for roots ending in 'e')
     { suffix: 'er', replace: '' },       // worker -> work
     { suffix: 'er', replace: 'e' },      // user -> use
     { suffix: 'ly', replace: '' },       // quickly -> quick
     { suffix: 'es', replace: '' },       // boxes -> box
+    { suffix: 'd', replace: '' },        // referenced -> reference
     { suffix: 's', replace: '' },        // cats -> cat
   ];
 
@@ -211,11 +214,11 @@ function loadDictionary() {
   return { dictSet, prefixIndex };
 }
 
-// --- Load custom dictionary ---
-function loadCustomDictionary() {
+// --- Load a word list file (custom dictionary or common words) ---
+function loadWordListFile(filepath) {
   const words = new Set();
   try {
-    const raw = fs.readFileSync(CUSTOM_DICT_FILE, 'utf8');
+    const raw = fs.readFileSync(filepath, 'utf8');
     for (const line of raw.split('\n')) {
       const word = line.trim().toLowerCase();
       if (word && !word.startsWith('#')) {
@@ -223,9 +226,19 @@ function loadCustomDictionary() {
       }
     }
   } catch {
-    // Custom dictionary not available -- skip
+    // File not available -- skip
   }
   return words;
+}
+
+// --- Load custom dictionary ---
+function loadCustomDictionary() {
+  return loadWordListFile(CUSTOM_DICT_FILE);
+}
+
+// --- Load common words supplement ---
+function loadCommonWords() {
+  return loadWordListFile(COMMON_WORDS_FILE);
 }
 
 // --- Suggest corrections ---
@@ -525,6 +538,12 @@ function main() {
   }
 
   const customDict = loadCustomDictionary();
+  const commonWords = loadCommonWords();
+
+  // Add common words supplement to dictSet (fills gaps in macOS dictionary)
+  for (const word of commonWords) {
+    dictSet.add(word);
+  }
 
   // Build ignore set (data.ignoreList + custom dictionary)
   const ignoreSet = new Set([
