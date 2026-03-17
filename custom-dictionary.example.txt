@@ -1,0 +1,36 @@
+# Custom Dictionary -- add your own words here
+# One word per line, case-insensitive
+# Lines starting with # are comments
+#
+# Add technical terms, proper nouns, abbreviations, and known project names
+# that the spell checker would otherwise flag as misspellings.
+
+# Example: common dev terms
+repo
+config
+env
+deps
+infra
+devops
+cli
+api
+sdk
+dns
+yaml
+json
+
+# Example: tools and frameworks (uncomment what you use)
+# kubernetes
+# terraform
+# proxmox
+# grafana
+# prometheus
+# docker
+# nginx
+# redis
+
+# Example: contractions without apostrophes (casual typing style)
+dont
+cant
+wont
+doesnt

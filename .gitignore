@@ -1,0 +1,6 @@
+node_modules/
+data.json
+data.json.tmp
+data.json.lock
+data.json.corrupt.*
+custom-dictionary.txt
