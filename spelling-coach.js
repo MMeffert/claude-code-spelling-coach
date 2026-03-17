@@ -14,7 +14,7 @@ const CURRENT_VERSION = 1;
 const HARD_TIMEOUT_MS = 1800;
 const MAX_SUGGEST_PER_PROMPT = 3;
 const MIN_WORD_LENGTH = 3;
-const QUICK_COMMAND_THRESHOLD = 15;
+const QUICK_COMMAND_THRESHOLD = 8;
 
 // --- Hard timeout ---
 const timeoutHandle = setTimeout(() => {
@@ -30,7 +30,7 @@ function defaultData() {
     config: {
       threshold: 3,
       cooldownInterval: 10,
-      minDaysBetweenHints: 7,
+      minDaysBetweenHints: 3,
       maxHintsPerSession: 1,
       maxMnemonics: 3
     },
@@ -377,23 +377,30 @@ function getMostCommonVariant(word) {
 function buildContext(triggered) {
   const parts = [];
 
+  // Format instructions: render as a visually distinct block (like insight blocks)
+  const formatNote = 'Present this in a visually distinct block using backticks, like:\n'
+    + '"`Spelling Coach ─────────────────────────`\n'
+    + '[content here]\n'
+    + '`─────────────────────────────────────────`"\n'
+    + 'Place it AFTER your main response, not before. Keep it brief.';
+
   for (const t of triggered) {
     switch (t.type) {
       case 'first':
         parts.push(
-          `[Spelling Coach] Mitchell has typed "${t.mostCommonVariant}" ${t.totalCount} times (correct: "${t.canonical}").`
-          + ` Generate a memorable, personal mnemonic -- use vivid imagery, humor, or decomposition.`
+          `[Spelling Coach] "${t.mostCommonVariant}" appears ${t.totalCount} times (correct: "${t.canonical}").`
+          + ` Generate a memorable mnemonic -- vivid imagery, humor, or decomposition.`
           + ` Example quality: "there's A RAT in sepARATE".`
-          + ` Then save it by running: echo '${t.canonical}|YOUR_MNEMONIC|TYPE' | node ~/.claude/hooks/spelling-coach/save-hint.js`
-          + ` (TYPE is one of: decomposition, rhyme, visual, acronym, story)`
-          + ` Keep the coaching brief and natural -- weave it in, don't lecture.`
+          + ` Then save it: echo '${t.canonical}|YOUR_MNEMONIC|TYPE' | node ~/.claude/hooks/spelling-coach/save-hint.js`
+          + ` (TYPE: decomposition, rhyme, visual, acronym, story)\n`
+          + formatNote
         );
         break;
 
       case 'cooldown':
         parts.push(
-          `[Spelling Coach] Spelling reminder for "${t.canonical}" (${t.totalCount}x): ${t.mnemonic}`
-          + ` Mention this casually in one sentence. Do not generate a new one.`
+          `[Spelling Coach] Reminder for "${t.canonical}" (${t.totalCount}x): ${t.mnemonic}\n`
+          + formatNote
         );
         break;
 
@@ -402,16 +409,18 @@ function buildContext(triggered) {
         const allTypes = ['decomposition', 'rhyme', 'visual', 'acronym', 'story'];
         const available = allTypes.filter(t2 => !t.usedTypes.includes(t2));
         parts.push(
-          `[Spelling Coach] "${t.canonical}" (${t.totalCount}x) -- previous approach didn't stick: ${retiredList}.`
+          `[Spelling Coach] "${t.canonical}" (${t.totalCount}x) -- previous hint didn't stick: ${retiredList}.`
           + ` Try a DIFFERENT style (${available.join(', ')}).`
-          + ` Save: echo '${t.canonical}|MNEMONIC|TYPE' | node ~/.claude/hooks/spelling-coach/save-hint.js`
+          + ` Save: echo '${t.canonical}|MNEMONIC|TYPE' | node ~/.claude/hooks/spelling-coach/save-hint.js\n`
+          + formatNote
         );
         break;
       }
 
       case 'fallback':
         parts.push(
-          `[Spelling Coach] Reminder: "${t.mostCommonVariant}" -> "${t.canonical}" (${t.totalCount}x)`
+          `[Spelling Coach] "${t.mostCommonVariant}" -> "${t.canonical}" (${t.totalCount}x)\n`
+          + formatNote
         );
         break;
     }
