@@ -29,5 +29,57 @@ websocket
 # myproject
 # mycompany
 
-# Example: contractions without apostrophes
-doesnt
+# Example: common tech terms not in SCOWL
+config
+configs
+frontend
+backend
+auth
+oauth
+hardcoded
+hardcodes
+hardcode
+readme
+readmes
+parser
+parsers
+plaintext
+iterm
+systemd
+launchd
+undeployed
+fallbacks
+env
+enum
+enums
+eval
+perf
+precache
+precached
+precaches
+kanban
+backfill
+codename
+codenames
+cutover
+params
+lookups
+callout
+callouts
+parseable
+superset
+natively
+learnings
+luma
+lenovo
+veeam
+ultrasharp
+dependabot
+serwist
+reparse
+mdx
+nav
+parallelize
+timedout
+plist
+unhandled

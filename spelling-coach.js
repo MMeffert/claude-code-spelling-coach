@@ -5,8 +5,9 @@ const path = require('node:path');
 
 // --- Constants ---
 const HOOK_DIR = path.join(process.env.HOME, '.claude', 'hooks', 'spelling-coach');
-const DATA_FILE = path.join(HOOK_DIR, 'data.json');
-const LOCK_FILE = path.join(HOOK_DIR, 'data.json.lock');
+const DATA_DIR = process.env.SPELLING_COACH_DATA_DIR || HOOK_DIR;
+const DATA_FILE = path.join(DATA_DIR, 'data.json');
+const LOCK_FILE = path.join(DATA_DIR, 'data.json.lock');
 const BUNDLED_DICT_FILE = path.join(HOOK_DIR, 'words.txt');
 const FALLBACK_DICT_FILE = '/usr/share/dict/words';
 const CUSTOM_DICT_FILE = path.join(HOOK_DIR, 'custom-dictionary.txt');
@@ -42,7 +43,8 @@ function defaultData() {
     words: {},
     grammarPatterns: {},
     ignoreList: [],
-    sessionHintsShown: 0
+    sessionHintsShown: 0,
+    lastSessionId: ''
   };
 }
 
@@ -76,6 +78,8 @@ function levenshtein(a, b) {
 // --- Strip non-prose content ---
 function stripNonProse(text) {
   let cleaned = text;
+  // Remove contractions (doesn't, it's, they're, etc.) before tokenization splits on apostrophe
+  cleaned = cleaned.replace(/\b\w+['\u2019](t|s|re|ve|ll|d|m)\b/gi, ' ');
   // Fenced code blocks
   cleaned = cleaned.replace(/```[\s\S]*?```/g, ' ');
   // Indented code blocks (4+ spaces at line start)
@@ -103,12 +107,12 @@ function stripNonProse(text) {
 // --- Tokenize ---
 function tokenize(text) {
   const words = text
-    .split(/[\s,;:!?()\[\]{}"'<>]+/)
+    .split(/[\s,;:!?()\[\]{}"'<>\u2018\u2019\u201C\u201D]+/)
     .map(w => w.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, ''))
     .filter(w => {
       if (w.length < MIN_WORD_LENGTH) return false;
       // Skip ALL_CAPS (acronyms)
-      if (/^[A-Z]+$/.test(w)) return false;
+      if (/^[A-Z]{2,}s?$/.test(w)) return false;
       // Skip words with digits
       if (/\d/.test(w)) return false;
       // Skip camelCase / PascalCase
@@ -224,8 +228,6 @@ function loadData() {
       return null; // Signal to bail
     }
 
-    // Reset session counter (each hook invocation is within one session, but
-    // sessionHintsShown persists across prompts in the same session via file)
     return data;
   } catch (err) {
     if (err.code === 'ENOENT') {
@@ -373,60 +375,61 @@ function getMostCommonVariant(word) {
   return result;
 }
 
-// --- Build additionalContext ---
-function buildContext(triggered) {
-  const parts = [];
-
-  // Format instructions: render as a visually distinct block (like insight blocks)
-  const formatNote = 'Present this in a visually distinct block using backticks, like:\n'
-    + '"`Spelling Coach ─────────────────────────`\n'
-    + '[content here]\n'
-    + '`─────────────────────────────────────────`"\n'
-    + 'Place it AFTER your main response, not before. Keep it brief.';
+// --- Build output (systemMessage + additionalContext) ---
+// systemMessage: always visible to the user in the terminal (guaranteed fallback)
+// additionalContext: instructions for Claude to render a formatted insight block + generate/save mnemonics
+function buildOutput(triggered) {
+  const messageParts = [];
+  const contextParts = [];
 
   for (const t of triggered) {
     switch (t.type) {
-      case 'first':
-        parts.push(
-          `[Spelling Coach] "${t.mostCommonVariant}" appears ${t.totalCount} times (correct: "${t.canonical}").`
-          + ` Generate a memorable mnemonic -- vivid imagery, humor, or decomposition.`
-          + ` Example quality: "there's A RAT in sepARATE".`
-          + ` Then save it: echo '${t.canonical}|YOUR_MNEMONIC|TYPE' | node ~/.claude/hooks/spelling-coach/save-hint.js`
-          + ` (TYPE: decomposition, rhyme, visual, acronym, story)\n`
-          + formatNote
+      case 'first': {
+        const content = `"${t.mostCommonVariant}" -> "${t.canonical}" (${t.totalCount}x)`;
+        messageParts.push(`Spelling Coach: ${content}`);
+        contextParts.push(
+          `[Spelling Coach] ${content}`
+          + ` -- generate a mnemonic (e.g. "there's A RAT in sepARATE") and save it:`
+          + ` echo '${t.canonical}|YOUR_MNEMONIC|TYPE' | node ~/.claude/hooks/spelling-coach/save-hint.js`
+          + ` (TYPE: decomposition, rhyme, visual, acronym, story)`
         );
         break;
+      }
 
-      case 'cooldown':
-        parts.push(
-          `[Spelling Coach] Reminder for "${t.canonical}" (${t.totalCount}x): ${t.mnemonic}\n`
-          + formatNote
-        );
+      case 'cooldown': {
+        const content = `"${t.canonical}" (${t.totalCount}x) -- ${t.mnemonic}`;
+        messageParts.push(`Spelling Coach: ${content}`);
+        contextParts.push(`[Spelling Coach] Reminder: ${content}`);
         break;
+      }
 
       case 'rotation': {
         const retiredList = t.retiredHints.map(h => `"${h.text}" (${h.type || 'unknown'})`).join(', ');
         const allTypes = ['decomposition', 'rhyme', 'visual', 'acronym', 'story'];
         const available = allTypes.filter(t2 => !t.usedTypes.includes(t2));
-        parts.push(
-          `[Spelling Coach] "${t.canonical}" (${t.totalCount}x) -- previous hint didn't stick: ${retiredList}.`
-          + ` Try a DIFFERENT style (${available.join(', ')}).`
-          + ` Save: echo '${t.canonical}|MNEMONIC|TYPE' | node ~/.claude/hooks/spelling-coach/save-hint.js\n`
-          + formatNote
+        const content = `"${t.canonical}" (${t.totalCount}x) -- previous hint didn't stick`;
+        messageParts.push(`Spelling Coach: ${content}`);
+        contextParts.push(
+          `[Spelling Coach] ${content}.`
+          + ` Previous: ${retiredList}. Try a DIFFERENT style (${available.join(', ')}).`
+          + ` Save: echo '${t.canonical}|MNEMONIC|TYPE' | node ~/.claude/hooks/spelling-coach/save-hint.js`
         );
         break;
       }
 
-      case 'fallback':
-        parts.push(
-          `[Spelling Coach] "${t.mostCommonVariant}" -> "${t.canonical}" (${t.totalCount}x)\n`
-          + formatNote
-        );
+      case 'fallback': {
+        const content = `"${t.mostCommonVariant}" -> "${t.canonical}" (${t.totalCount}x)`;
+        messageParts.push(`Spelling Coach: ${content}`);
+        contextParts.push(`[Spelling Coach] ${content}`);
         break;
+      }
     }
   }
 
-  return parts.join('\n\n');
+  return {
+    systemMessage: messageParts.join('\n'),
+    additionalContext: contextParts.join('\n\n')
+  };
 }
 
 // --- Main ---
@@ -470,6 +473,13 @@ function main() {
     // Future version -- bail
     process.stdout.write('{}');
     return;
+  }
+
+  // Reset session hints counter when session changes
+  const sessionId = input.session_id || '';
+  if (sessionId && sessionId !== data.lastSessionId) {
+    data.sessionHintsShown = 0;
+    data.lastSessionId = sessionId;
   }
 
   // Load dictionaries
@@ -567,12 +577,12 @@ function main() {
   data.stats.totalMisspellingsDetected += misspellingsThisPrompt;
 
   // Check thresholds (skip for quick commands)
-  let context = '';
+  let output = null;
   const wordCount = cleaned.split(/\s+/).filter(Boolean).length;
   if (wordCount >= QUICK_COMMAND_THRESHOLD && affectedWords.size > 0) {
     const triggered = checkThresholds(data, affectedWords);
     if (triggered.length > 0) {
-      context = buildContext(triggered);
+      output = buildOutput(triggered);
       data.sessionHintsShown = (data.sessionHintsShown || 0) + triggered.length;
       data.stats.totalHintsShown += triggered.length;
 
@@ -588,9 +598,12 @@ function main() {
   // Save data
   saveData(data);
 
-  // Output
-  if (context) {
-    process.stdout.write(JSON.stringify({ additionalContext: context }));
+  // Output -- systemMessage is always visible to user, additionalContext instructs Claude to render insight block
+  if (output && output.systemMessage) {
+    process.stdout.write(JSON.stringify({
+      systemMessage: output.systemMessage,
+      additionalContext: output.additionalContext
+    }));
   } else {
     process.stdout.write('{}');
   }
@@ -604,7 +617,7 @@ module.exports = {
   suggest,
   buildVariantMap,
   checkThresholds,
-  buildContext,
+  buildOutput,
   getMostCommonVariant,
   defaultData,
   loadDictionary,

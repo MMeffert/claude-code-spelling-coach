@@ -1,6 +1,6 @@
 'use strict';
 
-const { describe, it } = require('node:test');
+const { describe, it, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { execSync } = require('node:child_process');
 const path = require('node:path');
@@ -13,7 +13,7 @@ const {
   suggest,
   buildVariantMap,
   checkThresholds,
-  buildContext,
+  buildOutput,
   getMostCommonVariant,
   defaultData,
   loadDictionary
@@ -113,6 +113,20 @@ describe('stripNonProse', () => {
   it('handles empty input', () => {
     assert.equal(stripNonProse('').trim(), '');
   });
+
+  it('removes contractions with straight apostrophes', () => {
+    const result = stripNonProse("it doesn't work and hasn't been fixed");
+    assert.ok(!result.includes('doesn'), 'should remove "doesn\'t" entirely');
+    assert.ok(!result.includes('hasn'), 'should remove "hasn\'t" entirely');
+    assert.ok(result.includes('work'));
+  });
+
+  it('removes contractions with curly apostrophes', () => {
+    const result = stripNonProse('it doesn\u2019t work and they\u2019re trying');
+    assert.ok(!result.includes('doesn'), 'should remove curly-apostrophe contraction');
+    assert.ok(!result.includes('they'), 'should remove curly-apostrophe contraction');
+    assert.ok(result.includes('work'));
+  });
 });
 
 // --- tokenize ---
@@ -143,6 +157,14 @@ describe('tokenize', () => {
     assert.ok(!tokens.includes('rest'));
     assert.ok(tokens.includes('use'));
     assert.ok(tokens.includes('endpoints'));
+  });
+
+  it('filters pluralized acronyms (PRs, APIs)', () => {
+    const tokens = tokenize('review the PRs and check APIs today');
+    assert.ok(!tokens.includes('prs'), 'PRs should be filtered as pluralized acronym');
+    assert.ok(!tokens.includes('apis'), 'APIs should be filtered as pluralized acronym');
+    assert.ok(tokens.includes('review'));
+    assert.ok(tokens.includes('today'));
   });
 
   it('filters words with digits', () => {
@@ -428,45 +450,50 @@ describe('checkThresholds', () => {
 
 // --- buildContext ---
 
-describe('buildContext', () => {
-  it('builds first hint context', () => {
-    const context = buildContext([{
+describe('buildOutput', () => {
+  it('builds first hint with systemMessage and additionalContext', () => {
+    const output = buildOutput([{
       type: 'first',
       canonical: 'separate',
       mostCommonVariant: 'seperate',
       totalCount: 3
     }]);
-    assert.ok(context.includes('[Spelling Coach]'));
-    assert.ok(context.includes('seperate'));
-    assert.ok(context.includes('separate'));
-    assert.ok(context.includes('save-hint.js'));
+    // systemMessage: user-visible notification
+    assert.ok(output.systemMessage.includes('Spelling Coach'));
+    assert.ok(output.systemMessage.includes('seperate'));
+    assert.ok(output.systemMessage.includes('separate'));
+    // additionalContext: Claude instruction to generate/save mnemonic
+    assert.ok(output.additionalContext.includes('save-hint.js'));
+    assert.ok(output.additionalContext.includes('mnemonic'));
   });
 
-  it('builds cooldown context', () => {
-    const context = buildContext([{
+  it('builds cooldown with systemMessage and additionalContext marker', () => {
+    const output = buildOutput([{
       type: 'cooldown',
       canonical: 'separate',
       totalCount: 13,
       mnemonic: 'A RAT in separate'
     }]);
-    assert.ok(context.includes('A RAT in separate'));
-    assert.ok(context.includes('Do not generate a new one'));
+    assert.ok(output.systemMessage.includes('A RAT in separate'));
+    assert.ok(output.systemMessage.includes('separate'));
+    assert.ok(output.additionalContext.includes('[Spelling Coach]'));
+    assert.ok(output.additionalContext.includes('Reminder'));
   });
 
-  it('builds fallback context', () => {
-    const context = buildContext([{
+  it('builds fallback with systemMessage and additionalContext marker', () => {
+    const output = buildOutput([{
       type: 'fallback',
       canonical: 'separate',
       mostCommonVariant: 'seperate',
       totalCount: 10
     }]);
-    assert.ok(context.includes('seperate'));
-    assert.ok(context.includes('separate'));
-    assert.ok(!context.includes('save-hint'));
+    assert.ok(output.systemMessage.includes('seperate'));
+    assert.ok(output.systemMessage.includes('separate'));
+    assert.ok(output.additionalContext.includes('[Spelling Coach]'));
   });
 
-  it('builds rotation context with used types', () => {
-    const context = buildContext([{
+  it('builds rotation with systemMessage and additionalContext', () => {
+    const output = buildOutput([{
       type: 'rotation',
       canonical: 'separate',
       mostCommonVariant: 'seperate',
@@ -474,9 +501,29 @@ describe('buildContext', () => {
       retiredHints: [{ text: 'old hint', type: 'decomposition' }],
       usedTypes: ['decomposition']
     }]);
-    assert.ok(context.includes('decomposition'));
-    assert.ok(context.includes('save-hint.js'));
-    assert.ok(context.includes('DIFFERENT'));
+    assert.ok(output.systemMessage.includes('Spelling Coach'));
+    assert.ok(output.systemMessage.includes('separate'));
+    assert.ok(output.additionalContext.includes('save-hint.js'));
+    assert.ok(output.additionalContext.includes('DIFFERENT'));
+  });
+
+  it('combines multiple triggered hints in systemMessage', () => {
+    const output = buildOutput([
+      {
+        type: 'cooldown',
+        canonical: 'separate',
+        totalCount: 13,
+        mnemonic: 'A RAT in separate'
+      },
+      {
+        type: 'fallback',
+        canonical: 'infrastructure',
+        mostCommonVariant: 'infrustructure',
+        totalCount: 10
+      }
+    ]);
+    assert.ok(output.systemMessage.includes('separate'));
+    assert.ok(output.systemMessage.includes('infrastructure'));
   });
 });
 
@@ -484,7 +531,9 @@ describe('buildContext', () => {
 
 describe('integration', () => {
   const hookScript = path.join(__dirname, 'spelling-coach.js');
-  const dataFile = path.join(__dirname, 'data.json');
+  const tmpDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'spelling-coach-test-'));
+  const dataFile = path.join(tmpDir, 'data.json');
+  const envPrefix = `SPELLING_COACH_DATA_DIR=${tmpDir}`;
 
   // Clean up before/after tests
   function cleanData() {
@@ -493,10 +542,15 @@ describe('integration', () => {
     try { fs.unlinkSync(dataFile + '.lock'); } catch {}
   }
 
+  after(() => {
+    cleanData();
+    try { fs.rmdirSync(tmpDir); } catch {}
+  });
+
   it('outputs {} for empty prompt', () => {
     cleanData();
     const input = JSON.stringify({ user_prompt: '', session_id: 'test', cwd: '/tmp' });
-    const result = execSync(`echo '${input}' | node ${hookScript}`, { encoding: 'utf8' });
+    const result = execSync(`echo '${input}' | ${envPrefix} node ${hookScript}`, { encoding: 'utf8' });
     assert.equal(result.trim(), '{}');
     cleanData();
   });
@@ -504,7 +558,7 @@ describe('integration', () => {
   it('outputs {} for short prompts (quick commands)', () => {
     cleanData();
     const input = JSON.stringify({ user_prompt: 'deploy it', session_id: 'test', cwd: '/tmp' });
-    const result = execSync(`echo '${input}' | node ${hookScript}`, { encoding: 'utf8' });
+    const result = execSync(`echo '${input}' | ${envPrefix} node ${hookScript}`, { encoding: 'utf8' });
     assert.equal(result.trim(), '{}');
     cleanData();
   });
@@ -512,7 +566,7 @@ describe('integration', () => {
   it('outputs {} for code-only prompts', () => {
     cleanData();
     const input = JSON.stringify({ user_prompt: '```const x = infrustructure;```', session_id: 'test', cwd: '/tmp' });
-    const result = execSync(`echo '${input}' | node ${hookScript}`, { encoding: 'utf8' });
+    const result = execSync(`echo '${input}' | ${envPrefix} node ${hookScript}`, { encoding: 'utf8' });
     assert.equal(result.trim(), '{}');
     cleanData();
   });
@@ -524,7 +578,7 @@ describe('integration', () => {
       session_id: 'test',
       cwd: '/tmp'
     });
-    execSync(`echo '${input}' | node ${hookScript}`, { encoding: 'utf8' });
+    execSync(`echo '${input}' | ${envPrefix} node ${hookScript}`, { encoding: 'utf8' });
     assert.ok(fs.existsSync(dataFile), 'data.json should be created');
     const data = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
     assert.equal(data.stats.totalPromptsChecked, 1);
@@ -540,7 +594,7 @@ describe('integration', () => {
     });
     // Run 3 times
     for (let i = 0; i < 3; i++) {
-      execSync(`echo '${input}' | node ${hookScript}`, { encoding: 'utf8' });
+      execSync(`echo '${input}' | ${envPrefix} node ${hookScript}`, { encoding: 'utf8' });
     }
     const data = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
     assert.equal(data.stats.totalPromptsChecked, 3);
@@ -554,7 +608,7 @@ describe('integration', () => {
     cleanData();
   });
 
-  it('outputs additionalContext at threshold', () => {
+  it('outputs systemMessage at threshold', () => {
     cleanData();
     const input = JSON.stringify({
       user_prompt: 'please update the seperate configuration files and check the environment variables and make sure everything is set up correctly for the deployment pipeline',
@@ -563,12 +617,12 @@ describe('integration', () => {
     });
     let lastResult;
     for (let i = 0; i < 3; i++) {
-      lastResult = execSync(`echo '${input}' | node ${hookScript}`, { encoding: 'utf8' });
+      lastResult = execSync(`echo '${input}' | ${envPrefix} node ${hookScript}`, { encoding: 'utf8' });
     }
-    // The 3rd prompt should trigger additionalContext (if word count >= 15)
+    // The 3rd prompt should trigger systemMessage (if word count >= 15)
     const output = JSON.parse(lastResult.trim());
-    if (output.additionalContext) {
-      assert.ok(output.additionalContext.includes('[Spelling Coach]'));
+    if (output.systemMessage) {
+      assert.ok(output.systemMessage.includes('Spelling Coach'));
     }
     // Either way, data should show the word was tracked
     const data = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
@@ -583,7 +637,7 @@ describe('integration', () => {
       session_id: 'test',
       cwd: '/tmp'
     });
-    const result = execSync(`echo '${input}' | SPELLING_COACH_DISABLED=1 node ${hookScript}`, { encoding: 'utf8' });
+    const result = execSync(`echo '${input}' | SPELLING_COACH_DISABLED=1 ${envPrefix} node ${hookScript}`, { encoding: 'utf8' });
     assert.equal(result.trim(), '{}');
     assert.ok(!fs.existsSync(dataFile), 'data.json should not be created when disabled');
     cleanData();
@@ -597,9 +651,29 @@ describe('integration', () => {
       cwd: '/tmp'
     });
     const start = Date.now();
-    execSync(`echo '${input}' | node ${hookScript}`, { encoding: 'utf8' });
+    execSync(`echo '${input}' | ${envPrefix} node ${hookScript}`, { encoding: 'utf8' });
     const elapsed = Date.now() - start;
     assert.ok(elapsed < 2000, `Hook took ${elapsed}ms, expected < 2000ms`);
+    cleanData();
+  });
+
+  it('does not flag contraction fragments as misspellings', () => {
+    cleanData();
+    const input = JSON.stringify({
+      user_prompt: "it doesn\u0027t work and hasn\u0027t been fixed yet, they\u0027re working on the configuration changes carefully",
+      session_id: 'test',
+      cwd: '/tmp'
+    });
+    // Write input to temp file to avoid shell quoting issues with apostrophes
+    const inputFile = path.join(tmpDir, 'test-input.json');
+    fs.writeFileSync(inputFile, input);
+    execSync(`cat ${inputFile} | ${envPrefix} node ${hookScript}`, { encoding: 'utf8' });
+    const data = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
+    // "doesn" and "hasn" should NOT appear as misspelling variants
+    const allVariants = Object.values(data.words).flatMap(w => Object.keys(w.variants));
+    assert.ok(!allVariants.includes('doesn'), 'contraction fragment "doesn" should not be tracked');
+    assert.ok(!allVariants.includes('hasn'), 'contraction fragment "hasn" should not be tracked');
+    try { fs.unlinkSync(inputFile); } catch {}
     cleanData();
   });
 });
