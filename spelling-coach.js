@@ -1,16 +1,21 @@
-'use strict';
+"use strict";
 
-const fs = require('node:fs');
-const path = require('node:path');
+const fs = require("node:fs");
+const path = require("node:path");
 
 // --- Constants ---
-const HOOK_DIR = path.join(process.env.HOME, '.claude', 'hooks', 'spelling-coach');
+const HOOK_DIR = path.join(
+  process.env.HOME,
+  ".claude",
+  "hooks",
+  "spelling-coach",
+);
 const DATA_DIR = process.env.SPELLING_COACH_DATA_DIR || HOOK_DIR;
-const DATA_FILE = path.join(DATA_DIR, 'data.json');
-const LOCK_FILE = path.join(DATA_DIR, 'data.json.lock');
-const BUNDLED_DICT_FILE = path.join(HOOK_DIR, 'words.txt');
-const FALLBACK_DICT_FILE = '/usr/share/dict/words';
-const CUSTOM_DICT_FILE = path.join(HOOK_DIR, 'custom-dictionary.txt');
+const DATA_FILE = path.join(DATA_DIR, "data.json");
+const LOCK_FILE = path.join(DATA_DIR, "data.json.lock");
+const BUNDLED_DICT_FILE = path.join(HOOK_DIR, "words.txt");
+const FALLBACK_DICT_FILE = "/usr/share/dict/words";
+const CUSTOM_DICT_FILE = path.join(HOOK_DIR, "custom-dictionary.txt");
 const CURRENT_VERSION = 1;
 const HARD_TIMEOUT_MS = 1800;
 const MAX_SUGGEST_PER_PROMPT = 3;
@@ -19,7 +24,7 @@ const QUICK_COMMAND_THRESHOLD = 8;
 
 // --- Hard timeout ---
 const timeoutHandle = setTimeout(() => {
-  process.stdout.write('{}');
+  process.stdout.write("{}");
   process.exit(0);
 }, HARD_TIMEOUT_MS);
 timeoutHandle.unref();
@@ -33,18 +38,18 @@ function defaultData() {
       cooldownInterval: 10,
       minDaysBetweenHints: 3,
       maxHintsPerSession: 1,
-      maxMnemonics: 3
+      maxMnemonics: 3,
     },
     stats: {
       totalPromptsChecked: 0,
       totalMisspellingsDetected: 0,
-      totalHintsShown: 0
+      totalHintsShown: 0,
     },
     words: {},
     grammarPatterns: {},
     ignoreList: [],
     sessionHintsShown: 0,
-    lastSessionId: ''
+    lastSessionId: "",
   };
 }
 
@@ -65,9 +70,9 @@ function levenshtein(a, b) {
     for (let j = 1; j <= n; j++) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1;
       curr[j] = Math.min(
-        prev[j] + 1,       // deletion
-        curr[j - 1] + 1,   // insertion
-        prev[j - 1] + cost  // substitution
+        prev[j] + 1, // deletion
+        curr[j - 1] + 1, // insertion
+        prev[j - 1] + cost, // substitution
       );
     }
     [prev, curr] = [curr, prev];
@@ -79,28 +84,28 @@ function levenshtein(a, b) {
 function stripNonProse(text) {
   let cleaned = text;
   // Remove contractions (doesn't, it's, they're, etc.) before tokenization splits on apostrophe
-  cleaned = cleaned.replace(/\b\w+['\u2019](t|s|re|ve|ll|d|m)\b/gi, ' ');
+  cleaned = cleaned.replace(/\b\w+['\u2019](t|s|re|ve|ll|d|m)\b/gi, " ");
   // Fenced code blocks
-  cleaned = cleaned.replace(/```[\s\S]*?```/g, ' ');
+  cleaned = cleaned.replace(/```[\s\S]*?```/g, " ");
   // Indented code blocks (4+ spaces at line start)
-  cleaned = cleaned.replace(/^[ \t]{4,}\S.*$/gm, ' ');
+  cleaned = cleaned.replace(/^[ \t]{4,}\S.*$/gm, " ");
   // Inline code
-  cleaned = cleaned.replace(/`[^`]+`/g, ' ');
+  cleaned = cleaned.replace(/`[^`]+`/g, " ");
   // URLs
-  cleaned = cleaned.replace(/https?:\/\/[^\s)>\]]+/g, ' ');
+  cleaned = cleaned.replace(/https?:\/\/[^\s)>\]]+/g, " ");
   // File paths (Unix)
-  cleaned = cleaned.replace(/(?:~|\.{1,2})?\/[\w./-]+/g, ' ');
+  cleaned = cleaned.replace(/(?:~|\.{1,2})?\/[\w./-]+/g, " ");
   // File paths (Windows)
-  cleaned = cleaned.replace(/[A-Z]:\\[\w.\\/]+/g, ' ');
+  cleaned = cleaned.replace(/[A-Z]:\\[\w.\\/]+/g, " ");
   // CLI flags
-  cleaned = cleaned.replace(/--?[\w-]+=?\S*/g, ' ');
+  cleaned = cleaned.replace(/--?[\w-]+=?\S*/g, " ");
   // Hex colors/values
-  cleaned = cleaned.replace(/#[0-9a-fA-F]{3,8}\b/g, ' ');
-  cleaned = cleaned.replace(/0x[0-9a-fA-F]+/g, ' ');
+  cleaned = cleaned.replace(/#[0-9a-fA-F]{3,8}\b/g, " ");
+  cleaned = cleaned.replace(/0x[0-9a-fA-F]+/g, " ");
   // @mentions
-  cleaned = cleaned.replace(/@[\w.-]+/g, ' ');
+  cleaned = cleaned.replace(/@[\w.-]+/g, " ");
   // JSON-like content
-  cleaned = cleaned.replace(/\{[^}]*"[^"]*"[^}]*\}/g, ' ');
+  cleaned = cleaned.replace(/\{[^}]*"[^"]*"[^}]*\}/g, " ");
   return cleaned;
 }
 
@@ -108,8 +113,8 @@ function stripNonProse(text) {
 function tokenize(text) {
   const words = text
     .split(/[\s,;:!?()\[\]{}"'<>\u2018\u2019\u201C\u201D]+/)
-    .map(w => w.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, ''))
-    .filter(w => {
+    .map((w) => w.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, ""))
+    .filter((w) => {
       if (w.length < MIN_WORD_LENGTH) return false;
       // Skip ALL_CAPS (acronyms)
       if (/^[A-Z]{2,}s?$/.test(w)) return false;
@@ -119,7 +124,7 @@ function tokenize(text) {
       if (/[a-z][A-Z]/.test(w)) return false;
       return true;
     })
-    .map(w => w.toLowerCase());
+    .map((w) => w.toLowerCase());
 
   // Deduplicate within this prompt
   return [...new Set(words)];
@@ -136,7 +141,7 @@ function loadDictionary() {
   let raw = null;
   for (const dictPath of [BUNDLED_DICT_FILE, FALLBACK_DICT_FILE]) {
     try {
-      raw = fs.readFileSync(dictPath, 'utf8');
+      raw = fs.readFileSync(dictPath, "utf8");
       break;
     } catch {
       continue;
@@ -145,7 +150,7 @@ function loadDictionary() {
 
   if (!raw) return { dictSet, prefixIndex };
 
-  const words = raw.split('\n');
+  const words = raw.split("\n");
   for (const word of words) {
     const lower = word.toLowerCase().trim();
     if (lower.length < MIN_WORD_LENGTH) continue;
@@ -166,10 +171,10 @@ function loadDictionary() {
 function loadCustomDictionary() {
   const words = new Set();
   try {
-    const raw = fs.readFileSync(CUSTOM_DICT_FILE, 'utf8');
-    for (const line of raw.split('\n')) {
+    const raw = fs.readFileSync(CUSTOM_DICT_FILE, "utf8");
+    for (const line of raw.split("\n")) {
       const word = line.trim().toLowerCase();
-      if (word && !word.startsWith('#')) {
+      if (word && !word.startsWith("#")) {
         words.add(word);
       }
     }
@@ -214,13 +219,13 @@ function suggest(misspelled, prefixIndex, maxResults = 3) {
   return candidates
     .sort((a, b) => a.dist - b.dist)
     .slice(0, maxResults)
-    .map(c => c.word);
+    .map((c) => c.word);
 }
 
 // --- Data file operations ---
 function loadData() {
   try {
-    const raw = fs.readFileSync(DATA_FILE, 'utf8');
+    const raw = fs.readFileSync(DATA_FILE, "utf8");
     const data = JSON.parse(raw);
 
     // Future-proof: don't touch newer versions
@@ -230,12 +235,12 @@ function loadData() {
 
     return data;
   } catch (err) {
-    if (err.code === 'ENOENT') {
+    if (err.code === "ENOENT") {
       return defaultData();
     }
     // Corrupted file -- backup and reinit
     try {
-      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
       fs.renameSync(DATA_FILE, path.join(HOOK_DIR, `data.json.corrupt.${ts}`));
     } catch {
       // Can't backup -- just reinit
@@ -249,14 +254,14 @@ function saveData(data) {
   try {
     // Advisory lock
     try {
-      lockFd = fs.openSync(LOCK_FILE, 'wx');
+      lockFd = fs.openSync(LOCK_FILE, "wx");
     } catch {
       // Lock held -- check if stale (> 5 seconds)
       try {
         const lockStat = fs.statSync(LOCK_FILE);
         if (Date.now() - lockStat.mtimeMs > 5000) {
           fs.unlinkSync(LOCK_FILE);
-          lockFd = fs.openSync(LOCK_FILE, 'wx');
+          lockFd = fs.openSync(LOCK_FILE, "wx");
         } else {
           return; // Lock held by active process, skip save
         }
@@ -265,15 +270,25 @@ function saveData(data) {
       }
     }
 
+    // Cap the append-only ignoreList so data.json doesn't grow unboundedly
+    // (keep the most recent entries)
+    if (Array.isArray(data.ignoreList) && data.ignoreList.length > 2000) {
+      data.ignoreList = data.ignoreList.slice(-2000);
+    }
+
     // Atomic write
-    const tmpFile = DATA_FILE + '.tmp';
+    const tmpFile = DATA_FILE + ".tmp";
     fs.writeFileSync(tmpFile, JSON.stringify(data, null, 2));
     fs.renameSync(tmpFile, DATA_FILE);
   } finally {
     // Release lock
     if (lockFd !== null) {
-      try { fs.closeSync(lockFd); } catch {}
-      try { fs.unlinkSync(LOCK_FILE); } catch {}
+      try {
+        fs.closeSync(lockFd);
+      } catch {}
+      try {
+        fs.unlinkSync(LOCK_FILE);
+      } catch {}
     }
   }
 }
@@ -299,62 +314,72 @@ function checkThresholds(data, affectedWords) {
     if (!word || word.dismissed || word.learned) continue;
     if (data.sessionHintsShown >= cfg.maxHintsPerSession) break;
 
-    const activeMnemonics = (word.mnemonics || []).filter(m => !m.retired);
-    const retiredMnemonics = (word.mnemonics || []).filter(m => m.retired);
+    const activeMnemonics = (word.mnemonics || []).filter((m) => !m.retired);
+    const retiredMnemonics = (word.mnemonics || []).filter((m) => m.retired);
     const allMnemonics = word.mnemonics || [];
     const daysSinceLastHint = word.lastHintDate
-      ? (Date.now() - new Date(word.lastHintDate).getTime()) / (1000 * 60 * 60 * 24)
+      ? (Date.now() - new Date(word.lastHintDate).getTime()) /
+        (1000 * 60 * 60 * 24)
       : Infinity;
 
     // Fallback: hook asked 3+ times but Claude never saved
     if (word.hintsPending >= 3 && allMnemonics.length === 0) {
       const mostCommon = getMostCommonVariant(word);
       triggered.push({
-        type: 'fallback',
+        type: "fallback",
         canonical,
         mostCommonVariant: mostCommon,
-        totalCount: word.totalCount
+        totalCount: word.totalCount,
       });
       continue;
     }
 
     // First hint: threshold met, no mnemonics yet
-    if (word.totalCount >= cfg.threshold && allMnemonics.length === 0 && word.hintsPending < 3) {
+    if (
+      word.totalCount >= cfg.threshold &&
+      allMnemonics.length === 0 &&
+      word.hintsPending < 3
+    ) {
       const mostCommon = getMostCommonVariant(word);
       triggered.push({
-        type: 'first',
+        type: "first",
         canonical,
         mostCommonVariant: mostCommon,
-        totalCount: word.totalCount
+        totalCount: word.totalCount,
       });
       continue;
     }
 
     // Rotation: all mnemonics retired
-    if (activeMnemonics.length === 0 && retiredMnemonics.length > 0
-        && retiredMnemonics.length < cfg.maxMnemonics
-        && word.totalCount >= (word.lastHintAtCount || 0) + cfg.cooldownInterval
-        && daysSinceLastHint >= cfg.minDaysBetweenHints) {
+    if (
+      activeMnemonics.length === 0 &&
+      retiredMnemonics.length > 0 &&
+      retiredMnemonics.length < cfg.maxMnemonics &&
+      word.totalCount >= (word.lastHintAtCount || 0) + cfg.cooldownInterval &&
+      daysSinceLastHint >= cfg.minDaysBetweenHints
+    ) {
       triggered.push({
-        type: 'rotation',
+        type: "rotation",
         canonical,
         mostCommonVariant: getMostCommonVariant(word),
         totalCount: word.totalCount,
         retiredHints: retiredMnemonics,
-        usedTypes: retiredMnemonics.map(m => m.type).filter(Boolean)
+        usedTypes: retiredMnemonics.map((m) => m.type).filter(Boolean),
       });
       continue;
     }
 
     // Cooldown: show existing mnemonic again
-    if (activeMnemonics.length > 0
-        && word.totalCount >= (word.lastHintAtCount || 0) + cfg.cooldownInterval
-        && daysSinceLastHint >= cfg.minDaysBetweenHints) {
+    if (
+      activeMnemonics.length > 0 &&
+      word.totalCount >= (word.lastHintAtCount || 0) + cfg.cooldownInterval &&
+      daysSinceLastHint >= cfg.minDaysBetweenHints
+    ) {
       triggered.push({
-        type: 'cooldown',
+        type: "cooldown",
         canonical,
         totalCount: word.totalCount,
-        mnemonic: activeMnemonics[activeMnemonics.length - 1].text
+        mnemonic: activeMnemonics[activeMnemonics.length - 1].text,
       });
       continue;
     }
@@ -365,7 +390,7 @@ function checkThresholds(data, affectedWords) {
 
 function getMostCommonVariant(word) {
   let max = 0;
-  let result = '';
+  let result = "";
   for (const [variant, count] of Object.entries(word.variants)) {
     if (count > max) {
       max = count;
@@ -384,40 +409,48 @@ function buildOutput(triggered) {
 
   for (const t of triggered) {
     switch (t.type) {
-      case 'first': {
+      case "first": {
         const content = `"${t.mostCommonVariant}" -> "${t.canonical}" (${t.totalCount}x)`;
         messageParts.push(`Spelling Coach: ${content}`);
         contextParts.push(
-          `[Spelling Coach] ${content}`
-          + ` -- generate a mnemonic (e.g. "there's A RAT in sepARATE") and save it:`
-          + ` echo '${t.canonical}|YOUR_MNEMONIC|TYPE' | node ~/.claude/hooks/spelling-coach/save-hint.js`
-          + ` (TYPE: decomposition, rhyme, visual, acronym, story)`
+          `[Spelling Coach] ${content}` +
+            ` -- generate a mnemonic (e.g. "there's A RAT in sepARATE") and save it:` +
+            ` echo '${t.canonical}|YOUR_MNEMONIC|TYPE' | node ~/.claude/hooks/spelling-coach/save-hint.js` +
+            ` (TYPE: decomposition, rhyme, visual, acronym, story)`,
         );
         break;
       }
 
-      case 'cooldown': {
+      case "cooldown": {
         const content = `"${t.canonical}" (${t.totalCount}x) -- ${t.mnemonic}`;
         messageParts.push(`Spelling Coach: ${content}`);
         contextParts.push(`[Spelling Coach] Reminder: ${content}`);
         break;
       }
 
-      case 'rotation': {
-        const retiredList = t.retiredHints.map(h => `"${h.text}" (${h.type || 'unknown'})`).join(', ');
-        const allTypes = ['decomposition', 'rhyme', 'visual', 'acronym', 'story'];
-        const available = allTypes.filter(t2 => !t.usedTypes.includes(t2));
+      case "rotation": {
+        const retiredList = t.retiredHints
+          .map((h) => `"${h.text}" (${h.type || "unknown"})`)
+          .join(", ");
+        const allTypes = [
+          "decomposition",
+          "rhyme",
+          "visual",
+          "acronym",
+          "story",
+        ];
+        const available = allTypes.filter((t2) => !t.usedTypes.includes(t2));
         const content = `"${t.canonical}" (${t.totalCount}x) -- previous hint didn't stick`;
         messageParts.push(`Spelling Coach: ${content}`);
         contextParts.push(
-          `[Spelling Coach] ${content}.`
-          + ` Previous: ${retiredList}. Try a DIFFERENT style (${available.join(', ')}).`
-          + ` Save: echo '${t.canonical}|MNEMONIC|TYPE' | node ~/.claude/hooks/spelling-coach/save-hint.js`
+          `[Spelling Coach] ${content}.` +
+            ` Previous: ${retiredList}. Try a DIFFERENT style (${available.join(", ")}).` +
+            ` Save: echo '${t.canonical}|MNEMONIC|TYPE' | node ~/.claude/hooks/spelling-coach/save-hint.js`,
         );
         break;
       }
 
-      case 'fallback': {
+      case "fallback": {
         const content = `"${t.mostCommonVariant}" -> "${t.canonical}" (${t.totalCount}x)`;
         messageParts.push(`Spelling Coach: ${content}`);
         contextParts.push(`[Spelling Coach] ${content}`);
@@ -427,8 +460,8 @@ function buildOutput(triggered) {
   }
 
   return {
-    systemMessage: messageParts.join('\n'),
-    additionalContext: contextParts.join('\n\n')
+    systemMessage: messageParts.join("\n"),
+    additionalContext: contextParts.join("\n\n"),
   };
 }
 
@@ -436,24 +469,24 @@ function buildOutput(triggered) {
 function main() {
   // Environment disable check
   if (process.env.SPELLING_COACH_DISABLED) {
-    process.stdout.write('{}');
+    process.stdout.write("{}");
     return;
   }
 
   // Read stdin
   let input;
   try {
-    const raw = fs.readFileSync('/dev/stdin', 'utf8');
+    const raw = fs.readFileSync("/dev/stdin", "utf8");
     input = JSON.parse(raw);
   } catch {
-    process.stdout.write('{}');
+    process.stdout.write("{}");
     return;
   }
 
   // Extract prompt (user_prompt per hook contract, fallback to prompt)
-  const prompt = input.user_prompt || input.prompt || '';
+  const prompt = input.user_prompt || input.prompt || "";
   if (!prompt) {
-    process.stdout.write('{}');
+    process.stdout.write("{}");
     return;
   }
 
@@ -463,7 +496,7 @@ function main() {
 
   // Skip if too few tokens (likely all code or a quick command)
   if (tokens.length < 3) {
-    process.stdout.write('{}');
+    process.stdout.write("{}");
     return;
   }
 
@@ -471,12 +504,12 @@ function main() {
   const data = loadData();
   if (data === null) {
     // Future version -- bail
-    process.stdout.write('{}');
+    process.stdout.write("{}");
     return;
   }
 
   // Reset session hints counter when session changes
-  const sessionId = input.session_id || '';
+  const sessionId = input.session_id || "";
   if (sessionId && sessionId !== data.lastSessionId) {
     data.sessionHintsShown = 0;
     data.lastSessionId = sessionId;
@@ -486,7 +519,7 @@ function main() {
   const { dictSet, prefixIndex } = loadDictionary();
   if (dictSet.size === 0) {
     // No dictionary available -- skip spell checking
-    process.stdout.write('{}');
+    process.stdout.write("{}");
     return;
   }
 
@@ -494,8 +527,8 @@ function main() {
 
   // Build ignore set (data.ignoreList + custom dictionary)
   const ignoreSet = new Set([
-    ...(data.ignoreList || []).map(w => w.toLowerCase()),
-    ...customDict
+    ...(data.ignoreList || []).map((w) => w.toLowerCase()),
+    ...customDict,
   ]);
 
   // Add ignore words to dictionary for correct() checks
@@ -521,7 +554,8 @@ function main() {
     if (variantMap.has(token)) {
       const canonical = variantMap.get(token);
       if (data.words[canonical]) {
-        data.words[canonical].variants[token] = (data.words[canonical].variants[token] || 0) + 1;
+        data.words[canonical].variants[token] =
+          (data.words[canonical].variants[token] || 0) + 1;
         data.words[canonical].totalCount++;
         data.words[canonical].lastSeen = new Date().toISOString();
         affectedWords.add(canonical);
@@ -546,7 +580,8 @@ function main() {
     // Check if this canonical already exists
     if (data.words[topSuggestion]) {
       // Join existing group
-      data.words[topSuggestion].variants[token] = (data.words[topSuggestion].variants[token] || 0) + 1;
+      data.words[topSuggestion].variants[token] =
+        (data.words[topSuggestion].variants[token] || 0) + 1;
       data.words[topSuggestion].totalCount++;
       data.words[topSuggestion].lastSeen = new Date().toISOString();
       affectedWords.add(topSuggestion);
@@ -565,7 +600,7 @@ function main() {
         mnemonics: [],
         lastHintAtCount: 0,
         lastHintDate: null,
-        hintsPending: 0
+        hintsPending: 0,
       };
       affectedWords.add(topSuggestion);
     }
@@ -588,8 +623,12 @@ function main() {
 
       // Increment hintsPending for first-hint and rotation requests
       for (const t of triggered) {
-        if ((t.type === 'first' || t.type === 'rotation') && data.words[t.canonical]) {
-          data.words[t.canonical].hintsPending = (data.words[t.canonical].hintsPending || 0) + 1;
+        if (
+          (t.type === "first" || t.type === "rotation") &&
+          data.words[t.canonical]
+        ) {
+          data.words[t.canonical].hintsPending =
+            (data.words[t.canonical].hintsPending || 0) + 1;
         }
       }
     }
@@ -600,12 +639,14 @@ function main() {
 
   // Output -- systemMessage is always visible to user, additionalContext instructs Claude to render insight block
   if (output && output.systemMessage) {
-    process.stdout.write(JSON.stringify({
-      systemMessage: output.systemMessage,
-      additionalContext: output.additionalContext
-    }));
+    process.stdout.write(
+      JSON.stringify({
+        systemMessage: output.systemMessage,
+        additionalContext: output.additionalContext,
+      }),
+    );
   } else {
-    process.stdout.write('{}');
+    process.stdout.write("{}");
   }
 }
 
@@ -621,7 +662,7 @@ module.exports = {
   getMostCommonVariant,
   defaultData,
   loadDictionary,
-  CURRENT_VERSION
+  CURRENT_VERSION,
 };
 
 // Only run main() when executed directly (not when required by tests)
@@ -630,6 +671,6 @@ if (require.main === module) {
     main();
   } catch (err) {
     process.stderr.write(`[spelling-coach] Error: ${err.message}\n`);
-    process.stdout.write('{}');
+    process.stdout.write("{}");
   }
 }
